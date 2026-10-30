@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# Keep the example template
+!.env.example
+
+# macOS
+.DS_Store
+
+# Testing
+.pytest_cache/
+*.db
