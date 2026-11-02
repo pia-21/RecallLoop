@@ -5,11 +5,12 @@ import {
   Clock,
   BookOpen,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from "lucide-react";
 
 function StudySchedule() {
-  const [syllabus] = useState(() => {
+  const [syllabus, setSyllabus] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("recallLoopSyllabus"));
     } catch {
@@ -46,6 +47,76 @@ function StudySchedule() {
     }
   });
 
+  const deleteTopic = (topicName) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to remove "${topicName}" from your study plan?`
+    );
+
+    if (!confirmed) return;
+
+    // Remove the topic from the saved syllabus.
+    const updatedSyllabus = {
+      ...syllabus,
+      topics: syllabus.topics.filter((topic) => {
+        const name = typeof topic === "string" ? topic : topic.name;
+        return name !== topicName;
+      })
+    };
+
+    localStorage.setItem(
+      "recallLoopSyllabus",
+      JSON.stringify(updatedSyllabus)
+    );
+
+    setSyllabus(updatedSyllabus);
+
+    // Remove its completion status.
+    const updatedCompleted = completedTopics.filter(
+      (name) => name !== topicName
+    );
+
+    localStorage.setItem(
+      "recallLoopCompletedTopics",
+      JSON.stringify(updatedCompleted)
+    );
+
+    setCompletedTopics(updatedCompleted);
+
+    // Remove its saved brain-dump notes.
+    try {
+      const brainDumps = JSON.parse(
+        localStorage.getItem("recallLoopBrainDumps") || "{}"
+      );
+
+      delete brainDumps[topicName];
+
+      localStorage.setItem(
+        "recallLoopBrainDumps",
+        JSON.stringify(brainDumps)
+      );
+    } catch (error) {
+      console.error("Could not update brain dumps:", error);
+    }
+
+    // Remove its study activity.
+    try {
+      const activity = JSON.parse(
+        localStorage.getItem("recallLoopStudyActivity") || "[]"
+      );
+
+      const updatedActivity = activity.filter(
+        (record) => record.topicName !== topicName
+      );
+
+      localStorage.setItem(
+        "recallLoopStudyActivity",
+        JSON.stringify(updatedActivity)
+      );
+    } catch (error) {
+      console.error("Could not update study activity:", error);
+    }
+  };
+
   if (!syllabus || topics.length === 0) {
     return (
       <section className="page-content">
@@ -72,7 +143,6 @@ function StudySchedule() {
 
   const dailyHours = Number(syllabus.studyHours) || 3;
 
-
   const priorityOrder = {
     High: 1,
     Medium: 2,
@@ -83,7 +153,6 @@ function StudySchedule() {
     (a, b) =>
       priorityOrder[a.priority] - priorityOrder[b.priority]
   );
-
 
   const schedule = [];
   let topicIndex = 0;
@@ -127,58 +196,58 @@ function StudySchedule() {
 
   const unscheduledTopics = sortedTopics.slice(topicIndex);
 
- const toggleCompleted = (topicName, estimatedHours) => {
-  setCompletedTopics((previous) => {
-    const isAlreadyCompleted = previous.includes(topicName);
+  const toggleCompleted = (topicName, estimatedHours) => {
+    setCompletedTopics((previous) => {
+      const isAlreadyCompleted = previous.includes(topicName);
 
-    const updated = isAlreadyCompleted
-      ? previous.filter((item) => item !== topicName)
-      : [...previous, topicName];
+      const updated = isAlreadyCompleted
+        ? previous.filter((item) => item !== topicName)
+        : [...previous, topicName];
 
-    localStorage.setItem(
-      "recallLoopCompletedTopics",
-      JSON.stringify(updated)
-    );
-
-    const today = new Date();
-    const dateKey = [
-      today.getFullYear(),
-      String(today.getMonth() + 1).padStart(2, "0"),
-      String(today.getDate()).padStart(2, "0")
-    ].join("-");
-
-    let activity = [];
-
-    try {
-      activity = JSON.parse(
-        localStorage.getItem("recallLoopStudyActivity") || "[]"
+      localStorage.setItem(
+        "recallLoopCompletedTopics",
+        JSON.stringify(updated)
       );
-    } catch {
-      activity = [];
-    }
 
-    if (isAlreadyCompleted) {
-      activity = activity.filter(
-        (record) => record.topicName !== topicName
+      const currentDate = new Date();
+      const dateKey = [
+        currentDate.getFullYear(),
+        String(currentDate.getMonth() + 1).padStart(2, "0"),
+        String(currentDate.getDate()).padStart(2, "0")
+      ].join("-");
+
+      let activity = [];
+
+      try {
+        activity = JSON.parse(
+          localStorage.getItem("recallLoopStudyActivity") || "[]"
+        );
+      } catch {
+        activity = [];
+      }
+
+      if (isAlreadyCompleted) {
+        activity = activity.filter(
+          (record) => record.topicName !== topicName
+        );
+      } else {
+        activity.push({
+          topicName,
+          date: dateKey,
+          hours: Number(estimatedHours) || 1
+        });
+      }
+
+      localStorage.setItem(
+        "recallLoopStudyActivity",
+        JSON.stringify(activity)
       );
-    } else {
-      activity.push({
-        topicName,
-        date: dateKey,
-        hours: Number(estimatedHours) || 1
-      });
-    }
 
-    localStorage.setItem(
-      "recallLoopStudyActivity",
-      JSON.stringify(activity)
-    );
+      return updated;
+    });
+  };
 
-    return updated;
-  });
-};
-
-  const completedCount = topics.filter(topic =>
+  const completedCount = topics.filter((topic) =>
     completedTopics.includes(topic.name)
   ).length;
 
@@ -318,8 +387,8 @@ function StudySchedule() {
                     type="checkbox"
                     checked={isCompleted}
                     onChange={() =>
-  toggleCompleted(topic.name, topic.estimatedHours)
-}
+                      toggleCompleted(topic.name, topic.estimatedHours)
+                    }
                   />
 
                   <div className="topic-details">
@@ -341,6 +410,26 @@ function StudySchedule() {
                     {isCompleted ? "Completed" : "Pending"}
                   </span>
 
+                  <button
+                    type="button"
+                    onClick={() => deleteTopic(topic.name)}
+                    title={`Remove ${topic.name}`}
+                    aria-label={`Remove ${topic.name}`}
+                    style={{
+                      background: "#fff1f2",
+                      color: "#dc2626",
+                      border: "1px solid #fecaca",
+                      borderRadius: "8px",
+                      padding: "8px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                  >
+                    <Trash2 size={17} />
+                  </button>
+
                 </div>
               );
             })}
@@ -354,10 +443,37 @@ function StudySchedule() {
         <div className="content-card">
           <h3>Topics Still to Schedule</h3>
 
-          {unscheduledTopics.map(topic => (
-            <p key={topic.id}>
-              {topic.name} — {topic.estimatedHours} hours
-            </p>
+          {unscheduledTopics.map((topic) => (
+            <div
+              key={topic.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "10px"
+              }}
+            >
+              <p>
+                {topic.name} — {topic.estimatedHours} hours
+              </p>
+
+              <button
+                type="button"
+                onClick={() => deleteTopic(topic.name)}
+                title={`Remove ${topic.name}`}
+                aria-label={`Remove ${topic.name}`}
+                style={{
+                  background: "#fff1f2",
+                  color: "#dc2626",
+                  border: "1px solid #fecaca",
+                  borderRadius: "8px",
+                  padding: "8px",
+                  cursor: "pointer"
+                }}
+              >
+                <Trash2 size={17} />
+              </button>
+            </div>
           ))}
         </div>
       )}
