@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import {
   UploadCloud,
@@ -14,15 +13,19 @@ import {
 } from "lucide-react";
 const openPdfDatabase = () => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("RecallLoopFiles", 1);
+    const request = indexedDB.open("RecallLoopFiles", 2);
 
-    request.onupgradeneeded = () => {
-      const database = request.result;
+   request.onupgradeneeded = () => {
+  const database = request.result;
 
-      if (!database.objectStoreNames.contains("syllabusPdfs")) {
-        database.createObjectStore("syllabusPdfs");
-      }
-    };
+  if (!database.objectStoreNames.contains("syllabusPdfs")) {
+    database.createObjectStore("syllabusPdfs");
+  }
+
+  if (!database.objectStoreNames.contains("studyNotes")) {
+    database.createObjectStore("studyNotes");
+  }
+};
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -78,7 +81,7 @@ const getSavedPdf = async () => {
 
     request.onerror = () => {
       database.close();
-      reject(request.error);
+       reject(request.error);
     };
   });
 };
@@ -106,6 +109,72 @@ const deleteSavedPdf = async () => {
   });
 };
 
+const saveStudyNote = async (pdfFile) => {
+  const database = await openPdfDatabase();
+
+  const note = {
+    id: crypto.randomUUID(),
+    name: pdfFile.name,
+    file: pdfFile,
+    uploadedAt: new Date().toISOString()
+  };
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("studyNotes", "readwrite");
+
+    transaction.objectStore("studyNotes").put(note, note.id);
+
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(note);
+    };
+
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error);
+    };
+  });
+};
+
+const getSavedStudyNotes = async () => {
+  const database = await openPdfDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("studyNotes", "readonly");
+    const request = transaction.objectStore("studyNotes").getAll();
+
+    request.onsuccess = () => {
+      database.close();
+      resolve(request.result || []);
+    };
+
+    request.onerror = () => {
+      database.close();
+      reject(request.error);
+    };
+  });
+};
+
+const deleteStudyNote = async (noteId) => {
+  const database = await openPdfDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("studyNotes", "readwrite");
+
+    transaction.objectStore("studyNotes").delete(noteId);
+
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error);
+    };
+  });
+};
+
 function SyllabusInput() {
   const [subject, setSubject] = useState("");
   const [examDate, setExamDate] = useState("");
@@ -119,6 +188,104 @@ const [editTopicName, setEditTopicName] = useState("");
 const [editTopicHours, setEditTopicHours] = useState("1");
 const [editTopicPriority, setEditTopicPriority] = useState("Medium");
   const [file, setFile] = useState(null);
+  const [studyNotes, setStudyNotes] = useState([]);
+const [notesLoading, setNotesLoading] = useState(true);
+const [notesMessage, setNotesMessage] = useState("");
+useEffect(() => {
+  const loadStudyNotes = async () => {
+    try {
+      const savedNotes = await getSavedStudyNotes();
+      setStudyNotes(savedNotes);
+    } catch (error) {
+      console.error("Could not load study notes:", error);
+      setNotesMessage("Could not load your saved study notes.");
+    } finally {
+      setNotesLoading(false);
+    }
+  };
+
+  loadStudyNotes();
+}, []);
+const handleStudyNotesChange = async (event) => {
+  const selectedFiles = Array.from(event.target.files || []);
+
+  if (selectedFiles.length === 0) return;
+
+  const invalidFiles = selectedFiles.filter(
+    (selectedFile) => selectedFile.type !== "application/pdf"
+  );
+
+  if (invalidFiles.length > 0) {
+    setNotesMessage("Please select PDF files only.");
+    event.target.value = "";
+    return;
+  }
+
+  try {
+    const uploadedNotes = [];
+
+    for (const selectedFile of selectedFiles) {
+      const savedNote = await saveStudyNote(selectedFile);
+      uploadedNotes.push(savedNote);
+    }
+
+    setStudyNotes((currentNotes) => [
+      ...currentNotes,
+      ...uploadedNotes
+    ]);
+
+    setNotesMessage(
+      `${uploadedNotes.length} study note PDF(s) uploaded successfully.`
+    );
+  } catch (error) {
+    console.error("Study notes upload error:", error);
+    setNotesMessage("Could not save your study notes. Please try again.");
+  }
+
+  event.target.value = "";
+};
+
+const handleDeleteStudyNote = async (noteId) => {
+  const confirmed = window.confirm(
+    "Are you sure you want to delete this study note?"
+  );
+
+  if (!confirmed) return;
+
+  try {
+    await deleteStudyNote(noteId);
+
+    setStudyNotes((currentNotes) =>
+      currentNotes.filter((note) => note.id !== noteId)
+    );
+
+    setNotesMessage("Study note deleted successfully.");
+  } catch (error) {
+    console.error("Could not delete study note:", error);
+    setNotesMessage("Could not delete this study note. Please try again.");
+  }
+};
+
+const handleOpenStudyNote = (note) => {
+  const pdfUrl = URL.createObjectURL(note.file);
+  window.open(pdfUrl, "_blank");
+
+  setTimeout(() => URL.revokeObjectURL(pdfUrl), 60000);
+};
+
+const handleDownloadStudyNote = (note) => {
+  const pdfUrl = URL.createObjectURL(note.file);
+  const link = document.createElement("a");
+
+  link.href = pdfUrl;
+  link.download = note.name;
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  setTimeout(() => URL.revokeObjectURL(pdfUrl), 1000);
+};
 const [pdfUrl, setPdfUrl] = useState("");
 const [message, setMessage] = useState("");
 const [pdfLoading, setPdfLoading] = useState(true);
@@ -495,6 +662,92 @@ if (file) {
 
   </div>
 ) : null}
+ <div className="form-section">
+  <div className="form-section-heading">
+    <FileText size={21} />
+    <div>
+      <h3>Upload Your Study Notes</h3>
+      <p>
+        Upload lecture notes, revision materials and reference documents.
+        These will help RecallLoop evaluate your brain dumps.
+      </p>
+    </div>
+  </div>
+
+  <label className="upload-area">
+    <UploadCloud size={35} />
+    <strong>Click to upload study notes</strong>
+    <span>Select multiple PDF files</span>
+
+    <input
+      type="file"
+      accept=".pdf,application/pdf"
+      multiple
+      onChange={handleStudyNotesChange}
+      hidden
+    />
+  </label>
+
+  {notesMessage && (
+    <p className="form-message" role="status">
+      {notesMessage}
+    </p>
+  )}
+
+  {notesLoading ? (
+    <p>Loading your saved study notes...</p>
+  ) : (
+    <div className="manual-topic-list">
+      <h4>
+        Your Uploaded Study Notes ({studyNotes.length})
+      </h4>
+
+      {studyNotes.length === 0 ? (
+        <p className="empty-topics">
+          No study notes uploaded yet.
+        </p>
+      ) : (
+        studyNotes.map((note) => (
+          <div
+            className="manual-topic enhanced-topic"
+            key={note.id}
+          >
+            <div className="topic-details">
+              <FileText size={20} />
+
+              <span>{note.name}</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleOpenStudyNote(note)}
+              title="View study note"
+            >
+              View
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleDownloadStudyNote(note)}
+              title="Download study note"
+            >
+              Download
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleDeleteStudyNote(note.id)}
+              title="Delete study note"
+              aria-label={`Delete ${note.name}`}
+            >
+              <Trash2 size={17} />
+            </button>
+          </div>
+        ))
+      )}
+    </div>
+  )}
+</div>
         <div className="form-section">
           <div className="form-section-heading">
             <BookOpen size={21} />
