@@ -530,14 +530,21 @@ const studentCourse =
                 <h3>Overall Progress</h3>
                 <p>Your syllabus completion</p>
 
-                <div className="progress-circle">
-
-                  <div>
-                    <strong>{progress}%</strong>
-                    <small>Completed</small>
-                  </div>
-
-                </div>
+                <div
+  className="progress-circle"
+  style={{
+    background: `conic-gradient(
+      #2563eb 0% ${progress}%,
+      #e8edf5 ${progress}% 100%
+    )`,
+    transition: "background 0.4s ease"
+  }}
+>
+  <div>
+    <strong>{progress}%</strong>
+    <small>Completed</small>
+  </div>
+</div>
 
                 <div className="progress-info">
 
