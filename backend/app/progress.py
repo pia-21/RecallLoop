@@ -48,19 +48,19 @@ def initialize_database():
 
 def create_progress(plan_id: str, topic_names: list[str]):
     with get_connection() as connection:
-        connection.executemany(
-            """
-            INSERT INTO topic_progress
-            (plan_id, topic_name, status)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (plan_id, topic_name) DO NOTHING
-            """,
-            [
-                (plan_id, name, TopicStatus.not_started.value)
-                for name in topic_names
-            ],
-        )
-
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO topic_progress
+                (plan_id, topic_name, status)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (plan_id, topic_name) DO NOTHING
+                """,
+                [
+                    (plan_id, name, TopicStatus.not_started.value)
+                    for name in topic_names
+                ],
+            )
 
 def update_topic_status(
     plan_id: str,
