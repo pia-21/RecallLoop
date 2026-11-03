@@ -1,39 +1,47 @@
 
 import json
-import sqlite3
-from pathlib import Path
+import os
+
+import psycopg
+from psycopg.rows import dict_row
 
 from app.schemas import TopicStatus, TopicProgress, ProgressResponse
 
 
-# Store the database inside the backend folder.
-DATABASE_PATH = Path(__file__).resolve().parent.parent / "recallloop.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not configured")
 
 
 def get_connection():
-    connection = sqlite3.connect(DATABASE_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
+    return psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        prepare_threshold=None,
+    )
 
 
 def initialize_database():
     with get_connection() as connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS topic_progress (
+                id BIGSERIAL PRIMARY KEY,
                 plan_id TEXT NOT NULL,
                 topic_name TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'not_started',
-                PRIMARY KEY (plan_id, topic_name)
+                UNIQUE (plan_id, topic_name)
             )
         """)
 
         connection.execute("""
             CREATE TABLE IF NOT EXISTS topic_evaluations (
+                id BIGSERIAL PRIMARY KEY,
                 plan_id TEXT NOT NULL,
                 topic_name TEXT NOT NULL,
                 evaluation_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (plan_id, topic_name)
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (plan_id, topic_name)
             )
         """)
 
@@ -42,9 +50,10 @@ def create_progress(plan_id: str, topic_names: list[str]):
     with get_connection() as connection:
         connection.executemany(
             """
-            INSERT OR IGNORE INTO topic_progress
+            INSERT INTO topic_progress
             (plan_id, topic_name, status)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (plan_id, topic_name) DO NOTHING
             """,
             [
                 (plan_id, name, TopicStatus.not_started.value)
@@ -62,8 +71,8 @@ def update_topic_status(
         cursor = connection.execute(
             """
             UPDATE topic_progress
-            SET status = ?
-            WHERE plan_id = ? AND topic_name = ?
+            SET status = %s
+            WHERE plan_id = %s AND topic_name = %s
             """,
             (status.value, plan_id, topic_name),
         )
@@ -77,8 +86,8 @@ def get_progress(plan_id: str) -> ProgressResponse:
             """
             SELECT topic_name, status
             FROM topic_progress
-            WHERE plan_id = ?
-            ORDER BY rowid
+            WHERE plan_id = %s
+            ORDER BY id
             """,
             (plan_id,),
         ).fetchall()
@@ -109,7 +118,7 @@ def save_evaluation(
             """
             SELECT 1
             FROM topic_progress
-            WHERE plan_id = ? AND topic_name = ?
+            WHERE plan_id = %s AND topic_name = %s
             """,
             (plan_id, topic_name),
         ).fetchone()
@@ -121,10 +130,10 @@ def save_evaluation(
             """
             INSERT INTO topic_evaluations
             (plan_id, topic_name, evaluation_json, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(plan_id, topic_name)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (plan_id, topic_name)
             DO UPDATE SET
-                evaluation_json = excluded.evaluation_json,
+                evaluation_json = EXCLUDED.evaluation_json,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (plan_id, topic_name, evaluation_json),
@@ -139,7 +148,7 @@ def get_evaluation(plan_id: str, topic_name: str):
             """
             SELECT evaluation_json, updated_at
             FROM topic_evaluations
-            WHERE plan_id = ? AND topic_name = ?
+            WHERE plan_id = %s AND topic_name = %s
             """,
             (plan_id, topic_name),
         ).fetchone()
@@ -149,7 +158,7 @@ def get_evaluation(plan_id: str, topic_name: str):
 
     return {
         "evaluation": json.loads(row["evaluation_json"]),
-        "updated_at": row["updated_at"],
+        "updated_at": row["updated_at"].isoformat(),
     }
 
 
