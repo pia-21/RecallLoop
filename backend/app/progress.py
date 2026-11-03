@@ -1,4 +1,5 @@
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -22,6 +23,16 @@ def initialize_database():
                 plan_id TEXT NOT NULL,
                 topic_name TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'not_started',
+                PRIMARY KEY (plan_id, topic_name)
+            )
+        """)
+
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS topic_evaluations (
+                plan_id TEXT NOT NULL,
+                topic_name TEXT NOT NULL,
+                evaluation_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (plan_id, topic_name)
             )
         """)
@@ -86,5 +97,61 @@ def get_progress(plan_id: str) -> ProgressResponse:
     )
 
 
-# Create the database table when this module is loaded.
+def save_evaluation(
+    plan_id: str,
+    topic_name: str,
+    evaluation_data: dict,
+) -> bool:
+    evaluation_json = json.dumps(evaluation_data)
+
+    with get_connection() as connection:
+        topic = connection.execute(
+            """
+            SELECT 1
+            FROM topic_progress
+            WHERE plan_id = ? AND topic_name = ?
+            """,
+            (plan_id, topic_name),
+        ).fetchone()
+
+        if topic is None:
+            return False
+
+        connection.execute(
+            """
+            INSERT INTO topic_evaluations
+            (plan_id, topic_name, evaluation_json, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(plan_id, topic_name)
+            DO UPDATE SET
+                evaluation_json = excluded.evaluation_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (plan_id, topic_name, evaluation_json),
+        )
+
+        return True
+
+
+def get_evaluation(plan_id: str, topic_name: str):
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT evaluation_json, updated_at
+            FROM topic_evaluations
+            WHERE plan_id = ? AND topic_name = ?
+            """,
+            (plan_id, topic_name),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "evaluation": json.loads(row["evaluation_json"]),
+        "updated_at": row["updated_at"],
+    }
+
+
+# Create database tables when this module is loaded.
 initialize_database()

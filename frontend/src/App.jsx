@@ -7,6 +7,7 @@ import AIFeedback from "./pages/AIFeedback";
 import Progress from "./pages/Progress";
 import RevisionPlan from "./pages/RevisionPlan";
 import SettingsPage from "./pages/Settings";
+import API_URL from "./config/api";
 
 import {
   LayoutDashboard,
@@ -26,6 +27,8 @@ import {
   Plus,
   GraduationCap
 } from "lucide-react";
+
+const PLAN_ID_KEY = "recallLoopPlanId";
 
 const navigation = [
   { name: "Dashboard", icon: LayoutDashboard },
@@ -72,7 +75,6 @@ function calculateStreak(activity) {
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayKey = getDateKey(yesterday);
 
-  
   let currentDate = dates[0];
 
   if (currentDate !== todayKey && currentDate !== yesterdayKey) {
@@ -101,64 +103,109 @@ function calculateStreak(activity) {
 
 function App() {
   const studentName =
-  localStorage.getItem("recallLoopDisplayName") ||
-  localStorage.getItem("recallLoopFullName") ||
-  "Student";
+    localStorage.getItem("recallLoopDisplayName") ||
+    localStorage.getItem("recallLoopFullName") ||
+    "Student";
 
-const studentCourse =
-  localStorage.getItem("recallLoopCourse") || "Your learning space";
+  const studentCourse =
+    localStorage.getItem("recallLoopCourse") || "Your learning space";
+
   const [activePage, setActivePage] = useState("Dashboard");
   const [mobileMenu, setMobileMenu] = useState(false);
-
   const [searchTerm, setSearchTerm] = useState("");
+
   const [dashboardData, setDashboardData] = useState({
     syllabus: null,
     topics: [],
     completedTopics: [],
     activity: [],
-    brainDumps: {}
+    brainDumps: {},
+    backendStatuses: null
   });
-
 
   useEffect(() => {
     if (activePage !== "Dashboard") return;
 
-    const syllabus = readStorage("recallLoopSyllabus", null);
-    const completedTopics = readStorage(
-      "recallLoopCompletedTopics",
-      []
-    );
-    const activity = readStorage("recallLoopStudyActivity", []);
-    const brainDumps = readStorage("recallLoopBrainDumps", {});
+    let isActive = true;
 
-    const topics = (syllabus?.topics || []).map((topic) => {
-      if (typeof topic === "string") {
+    const loadDashboardData = async () => {
+      const syllabus = readStorage("recallLoopSyllabus", null);
+      const completedTopics = readStorage(
+        "recallLoopCompletedTopics",
+        []
+      );
+      const activity = readStorage("recallLoopStudyActivity", []);
+      const brainDumps = readStorage("recallLoopBrainDumps", {});
+
+      const topics = (syllabus?.topics || []).map((topic) => {
+        if (typeof topic === "string") {
+          return {
+            name: topic,
+            estimatedHours: 1,
+            priority: "Medium"
+          };
+        }
+
         return {
-          name: topic,
-          estimatedHours: 1,
-          priority: "Medium"
+          name: topic.name,
+          estimatedHours: Number(topic.estimatedHours) || 1,
+          priority: topic.priority || "Medium"
         };
+      });
+
+      let backendStatuses = null;
+
+      const planId = localStorage.getItem(PLAN_ID_KEY);
+
+      if (planId) {
+        try {
+          const response = await fetch(
+            `${API_URL}/api/progress/${planId}`
+          );
+
+          if (!response.ok) {
+            throw new Error("Could not fetch backend progress");
+          }
+
+          const data = await response.json();
+
+          backendStatuses = {};
+
+          data.topics.forEach((topic) => {
+            backendStatuses[topic.topic_name] = topic.status;
+          });
+        } catch (error) {
+          console.error("Dashboard progress loading error:", error);
+        }
       }
 
-      return {
-        name: topic.name,
-        estimatedHours: Number(topic.estimatedHours) || 1,
-        priority: topic.priority || "Medium"
-      };
-    });
+      if (!isActive) return;
 
-    setDashboardData({
-      syllabus,
-      topics,
-      completedTopics: Array.isArray(completedTopics)
-        ? completedTopics
-        : [],
-      activity: Array.isArray(activity) ? activity : [],
-      brainDumps:
-        brainDumps && typeof brainDumps === "object"
-          ? brainDumps
-          : {}
-    });
+      setDashboardData({
+        syllabus,
+        topics,
+        completedTopics: Array.isArray(completedTopics)
+          ? completedTopics
+          : [],
+        activity: Array.isArray(activity) ? activity : [],
+        brainDumps:
+          brainDumps && typeof brainDumps === "object"
+            ? brainDumps
+            : {},
+        backendStatuses
+      });
+    };
+
+    loadDashboardData();
+
+    window.addEventListener("focus", loadDashboardData);
+    window.addEventListener("storage", loadDashboardData);
+
+    return () => {
+      isActive = false;
+      window.removeEventListener("focus", loadDashboardData);
+      window.removeEventListener("storage", loadDashboardData);
+    };
   }, [activePage]);
 
   const {
@@ -166,13 +213,24 @@ const studentCourse =
     topics,
     completedTopics,
     activity,
-    brainDumps
+    brainDumps,
+    backendStatuses
   } = dashboardData;
+
+  const getTopicStatus = (topicName) => {
+    if (backendStatuses && backendStatuses[topicName]) {
+      return backendStatuses[topicName];
+    }
+
+    return completedTopics.includes(topicName)
+      ? "recalled"
+      : "not_started";
+  };
 
   const totalTopics = topics.length;
 
-  const completedCount = topics.filter((topic) =>
-    completedTopics.includes(topic.name)
+  const completedCount = topics.filter(
+    (topic) => getTopicStatus(topic.name) === "recalled"
   ).length;
 
   const remainingCount = Math.max(
@@ -192,7 +250,6 @@ const studentCourse =
 
   const streak = calculateStreak(activity);
 
-
   const dailyHours = Number(syllabus?.studyHours) || 2;
 
   const priorityOrder = {
@@ -202,7 +259,7 @@ const studentCourse =
   };
 
   const remainingTopics = topics
-    .filter((topic) => !completedTopics.includes(topic.name))
+    .filter((topic) => getTopicStatus(topic.name) !== "recalled")
     .sort(
       (a, b) =>
         (priorityOrder[a.priority] || 2) -
@@ -221,7 +278,6 @@ const studentCourse =
     plannedHours += topic.estimatedHours;
   }
 
-  
   const searchResults = searchTerm.trim()
     ? topics.filter((topic) => {
         const savedNote = brainDumps[topic.name] || "";
@@ -374,8 +430,8 @@ const studentCourse =
 
                 <p className="subtitle">
                   {studentCourse
-  ? `Keep learning, keep recalling, and get closer to your goals.`
-  : "Welcome to your learning space."}
+                    ? `Keep learning, keep recalling, and get closer to your goals.`
+                    : "Welcome to your learning space."}
                 </p>
               </div>
 
@@ -475,7 +531,8 @@ const studentCourse =
                     </div>
                   ) : (
                     todayTopics.map((topic) => {
-                      const isDone = completedTopics.includes(topic.name);
+                      const status = getTopicStatus(topic.name);
+                      const isDone = status === "recalled";
 
                       return (
                         <div className="topic-row" key={topic.name}>
@@ -505,7 +562,13 @@ const studentCourse =
                               isDone ? "done" : ""
                             }`}
                           >
-                            {isDone ? "Completed" : "Upcoming"}
+                            {status === "needs_revision"
+                              ? "Needs revision"
+                              : status === "in_progress"
+                              ? "In progress"
+                              : isDone
+                              ? "Completed"
+                              : "Upcoming"}
                           </span>
 
                         </div>
@@ -531,20 +594,20 @@ const studentCourse =
                 <p>Your syllabus completion</p>
 
                 <div
-  className="progress-circle"
-  style={{
-    background: `conic-gradient(
-      #2563eb 0% ${progress}%,
-      #e8edf5 ${progress}% 100%
-    )`,
-    transition: "background 0.4s ease"
-  }}
->
-  <div>
-    <strong>{progress}%</strong>
-    <small>Completed</small>
-  </div>
-</div>
+                  className="progress-circle"
+                  style={{
+                    background: `conic-gradient(
+                      #2563eb 0% ${progress}%,
+                      #e8edf5 ${progress}% 100%
+                    )`,
+                    transition: "background 0.4s ease"
+                  }}
+                >
+                  <div>
+                    <strong>{progress}%</strong>
+                    <small>Completed</small>
+                  </div>
+                </div>
 
                 <div className="progress-info">
 

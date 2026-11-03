@@ -8,14 +8,48 @@ import {
   MessageSquareText,
   BookOpen,
   Sparkles,
-  Clock,
   RefreshCw
 } from "lucide-react";
+import API_URL from "../config/api";
+
+const PLAN_ID_KEY = "recallLoopPlanId";
+
+function openPdfDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("RecallLoopFiles", 2);
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getSavedStudyNotes() {
+  const database = await openPdfDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction("studyNotes", "readonly");
+    const request = transaction.objectStore("studyNotes").getAll();
+
+    request.onsuccess = () => {
+      resolve(request.result || []);
+      database.close();
+    };
+
+    request.onerror = () => {
+      reject(request.error);
+      database.close();
+    };
+  });
+}
 
 function AIFeedback() {
   const [savedDumps, setSavedDumps] = useState({});
   const [selectedTopic, setSelectedTopic] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const [savedEvaluationAt, setSavedEvaluationAt] = useState(null);
+  const [error, setError] = useState("");
 
   const loadBrainDumps = () => {
     try {
@@ -48,6 +82,75 @@ function AIFeedback() {
     };
   }, []);
 
+  // Retrieve an existing evaluation whenever the selected topic changes.
+  useEffect(() => {
+    let isActive = true;
+
+    const loadSavedEvaluation = async () => {
+      setFeedback(null);
+      setSavedEvaluationAt(null);
+      setError("");
+
+      if (!selectedTopic) {
+        setLoadingSaved(false);
+        return;
+      }
+
+      const planId = localStorage.getItem(PLAN_ID_KEY);
+
+      if (!planId) {
+        setLoadingSaved(false);
+        return;
+      }
+
+      setLoadingSaved(true);
+
+      try {
+        const response = await fetch(
+          `${API_URL}/api/evaluations/${planId}/${encodeURIComponent(selectedTopic)}`
+        );
+
+        // A 404 simply means this topic has not been analysed yet.
+        if (response.status === 404) {
+          return;
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.detail || "Could not retrieve the saved evaluation."
+          );
+        }
+
+        if (!isActive) return;
+
+        if (data.evaluation) {
+          setFeedback(data.evaluation);
+          setSavedEvaluationAt(data.updated_at || null);
+        }
+      } catch (err) {
+        console.error("Saved evaluation loading error:", err);
+
+        if (isActive) {
+          setError(
+            err.message || "Could not load the saved evaluation."
+          );
+        }
+      } finally {
+        if (isActive) {
+          setLoadingSaved(false);
+        }
+      }
+    };
+
+    loadSavedEvaluation();
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedTopic]);
+
   const topics = Object.keys(savedDumps);
   const studentAnswer = savedDumps[selectedTopic] || "";
 
@@ -55,16 +158,104 @@ function AIFeedback() {
     ? studentAnswer.trim().split(/\s+/).length
     : 0;
 
-  const handleAnalyse = () => {
+  const handleAnalyse = async () => {
     if (!studentAnswer.trim()) return;
 
     setLoading(true);
+    setError("");
+    setFeedback(null);
+    setSavedEvaluationAt(null);
 
+    try {
+      const planId = localStorage.getItem(PLAN_ID_KEY);
 
-    setTimeout(() => {
+      if (!planId) {
+        throw new Error(
+          "No active study plan found. Please generate your study plan first."
+        );
+      }
+
+      // Retrieve uploaded study-note PDFs.
+      const notes = await getSavedStudyNotes();
+
+      if (!notes.length) {
+        throw new Error(
+          "No study notes found. Upload at least one study-notes PDF before analysing your answer."
+        );
+      }
+
+      // Extract readable text from each PDF using the backend.
+      const extractedNotes = await Promise.all(
+        notes.map(async note => {
+          const formData = new FormData();
+          formData.append("file", note.file, note.name);
+
+          const response = await fetch(
+            `${API_URL}/api/reference/extract`,
+            {
+              method: "POST",
+              body: formData
+            }
+          );
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(
+              data.detail || `Could not extract ${note.name}.`
+            );
+          }
+
+          return `\n\n--- ${data.filename} ---\n${data.text}`;
+        })
+      );
+
+      const referenceText = extractedNotes.join("\n").slice(0, 30000);
+
+      if (!referenceText.trim()) {
+        throw new Error(
+          "No readable text was found in your uploaded study notes."
+        );
+      }
+
+      // Evaluate the brain dump and associate it with the active plan.
+      const response = await fetch(`${API_URL}/api/evaluate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          plan_id: planId,
+          topic: selectedTopic,
+          brain_dump: studentAnswer,
+          reference_text: referenceText
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "Unable to analyse your answer right now."
+        );
+      }
+
+      setFeedback(data);
+      setSavedEvaluationAt(new Date().toISOString());
+    } catch (err) {
+      console.error("RecallLoop analysis error:", err);
+      setError(
+        err.message || "Something went wrong. Please try again."
+      );
+    } finally {
       setLoading(false);
-    }, 700);
+    }
   };
+
+  const evaluation = feedback?.evaluation;
+  const correctlyRecalled = evaluation?.correctly_recalled || [];
+  const missingConcepts = evaluation?.missing_concepts || [];
+  const misconceptions = evaluation?.misconceptions || [];
 
   return (
     <section className="page-content">
@@ -140,12 +331,12 @@ function AIFeedback() {
             <button
               className="ai-analyse-button"
               onClick={handleAnalyse}
-              disabled={!studentAnswer.trim() || loading}
+              disabled={!studentAnswer.trim() || loading || loadingSaved}
             >
               {loading ? (
                 <>
                   <RefreshCw size={18} />
-                  Preparing...
+                  Analysing...
                 </>
               ) : (
                 <>
@@ -155,7 +346,26 @@ function AIFeedback() {
               )}
             </button>
 
-          
+            {loadingSaved && (
+              <p>Checking for a saved evaluation...</p>
+            )}
+
+            {savedEvaluationAt && !loadingSaved && (
+              <p>
+                <CheckCircle2 size={15} style={{ display: "inline", verticalAlign: "middle" }} />{" "}
+                Saved evaluation retrieved
+                {new Date(savedEvaluationAt).toLocaleString()}
+                <br />
+                If you have edited your Brain Dump since this evaluation,
+                analyse again to update your feedback.
+              </p>
+            )}
+
+            {error && (
+              <p role="alert" className="ai-error-message">
+                {error}
+              </p>
+            )}
 
           </div>
 
@@ -180,8 +390,6 @@ function AIFeedback() {
               <p className="eyebrow">YOUR LEARNING ANALYSIS</p>
               <h2>Feedback Overview</h2>
             </div>
-
-           
           </div>
 
           <div className="ai-feedback-grid">
@@ -191,10 +399,24 @@ function AIFeedback() {
                 <CheckCircle2 size={23} />
               </div>
               <h3>Correct Concepts</h3>
-              <p>
-                Identify the concepts you have explained correctly.
-              </p>
 
+              {evaluation ? (
+                correctlyRecalled.length ? (
+                  <ul>
+                    {correctlyRecalled.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No correctly recalled concepts were identified.</p>
+                )
+              ) : (
+                <p>
+                  {loadingSaved
+                    ? "Loading saved feedback..."
+                    : "Identify the concepts you have explained correctly."}
+                </p>
+              )}
             </div>
 
             <div className="content-card ai-feedback-card">
@@ -202,10 +424,24 @@ function AIFeedback() {
                 <BookOpen size={23} />
               </div>
               <h3>Missing Concepts</h3>
-              <p>
-                Discover important information you may have left out.
-              </p>
 
+              {evaluation ? (
+                missingConcepts.length ? (
+                  <ul>
+                    {missingConcepts.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No missing concepts were identified.</p>
+                )
+              ) : (
+                <p>
+                  {loadingSaved
+                    ? "Loading saved feedback..."
+                    : "Discover important information you may have left out."}
+                </p>
+              )}
             </div>
 
             <div className="content-card ai-feedback-card">
@@ -213,32 +449,77 @@ function AIFeedback() {
                 <AlertCircle size={23} />
               </div>
               <h3>Misunderstandings</h3>
-              <p>
-                Identify explanations that may be incorrect or need clarification.
-              </p>
-              
+
+              {evaluation ? (
+                misconceptions.length ? (
+                  <ul>
+                    {misconceptions.map((item, index) => (
+                      <li key={index}>
+                        <strong>Your statement:</strong>{" "}
+                        {item.student_statement}
+                        <br />
+                        <strong>Issue:</strong> {item.issue}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No misunderstandings were identified.</p>
+                )
+              ) : (
+                <p>
+                  {loadingSaved
+                    ? "Loading saved feedback..."
+                    : "Identify statements that may be incorrect or need clarification."}
+                </p>
+              )}
             </div>
 
             <div className="content-card ai-feedback-card">
               <div className="feedback-icon suggestions">
                 <Lightbulb size={23} />
               </div>
-              <h3>Improvement Tips</h3>
-              <p>
-                Receive recommendations on what to revise and how to improve.
-              </p>
-             
+              <h3>Next Revision Action</h3>
+
+              {feedback ? (
+                <>
+                  <p>
+                    {feedback.next_action?.type || "No revision action provided."}
+                  </p>
+                  <p>
+                    <strong>Priority:</strong>{" "}
+                    {feedback.next_action?.priority || "Not specified"}
+                  </p>
+                </>
+              ) : (
+                <p>
+                  {loadingSaved
+                    ? "Loading saved feedback..."
+                    : "Receive a recommendation on what to revise next."}
+                </p>
+              )}
             </div>
 
           </div>
 
-          <div className="content-card ai-overall-card">
-            <Sparkles size={25} />
-            <div>
-              <h3>Overall AI Feedback</h3>
-              
+          {feedback && (
+            <div className="content-card ai-overall-card">
+              <Sparkles size={25} />
+              <div>
+                <h3>Overall AI Feedback</h3>
+
+                <p>
+                  <strong>Recall status:</strong>{" "}
+                  {evaluation?.recall_status || "Not available"}
+                </p>
+
+                <p>
+                  <strong>Confidence assessment:</strong>{" "}
+                  {evaluation?.confidence_assessment || "Not available"}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
+
         </>
 
       )}

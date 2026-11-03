@@ -9,33 +9,89 @@ import {
   Target,
   RefreshCw
 } from "lucide-react";
+import API_URL from "../config/api";
+
+const PLAN_ID_KEY = "recallLoopPlanId";
 
 function RevisionPlan() {
   const [syllabus, setSyllabus] = useState(null);
   const [completedTopics, setCompletedTopics] = useState([]);
+  const [backendStatuses, setBackendStatuses] = useState(null);
   const [checklist, setChecklist] = useState([
     false, false, false, false
   ]);
 
   useEffect(() => {
-    const savedSyllabus = JSON.parse(
-      localStorage.getItem("recallLoopSyllabus") || "null"
-    );
+    let isActive = true;
 
-    const savedCompleted = JSON.parse(
-      localStorage.getItem("recallLoopCompletedTopics") || "[]"
-    );
+    const loadRevisionData = async () => {
+      try {
+        const savedSyllabus = JSON.parse(
+          localStorage.getItem("recallLoopSyllabus") || "null"
+        );
 
-    const savedChecklist = JSON.parse(
-      localStorage.getItem("recallLoopRevisionChecklist") || "null"
-    );
+        const savedCompleted = JSON.parse(
+          localStorage.getItem("recallLoopCompletedTopics") || "[]"
+        );
 
-    setSyllabus(savedSyllabus);
-    setCompletedTopics(savedCompleted);
+        const savedChecklist = JSON.parse(
+          localStorage.getItem("recallLoopRevisionChecklist") || "null"
+        );
 
-    if (Array.isArray(savedChecklist) && savedChecklist.length === 4) {
-      setChecklist(savedChecklist);
-    }
+        if (!isActive) return;
+
+        setSyllabus(savedSyllabus);
+        setCompletedTopics(savedCompleted);
+
+        if (Array.isArray(savedChecklist) && savedChecklist.length === 4) {
+          setChecklist(savedChecklist);
+        }
+
+        const planId = localStorage.getItem(PLAN_ID_KEY);
+
+        if (!planId) {
+          setBackendStatuses(null);
+          return;
+        }
+
+        const response = await fetch(
+          `${API_URL}/api/progress/${planId}`
+        );
+
+        if (!response.ok) {
+          throw new Error("Could not fetch revision progress");
+        }
+
+        const data = await response.json();
+
+        if (!isActive) return;
+
+        const statusMap = {};
+
+        data.topics.forEach((topic) => {
+          statusMap[topic.topic_name] = topic.status;
+        });
+
+        setBackendStatuses(statusMap);
+      } catch (error) {
+        console.error("Revision data loading error:", error);
+
+        if (isActive) {
+          setBackendStatuses(null);
+        }
+      }
+    };
+
+    loadRevisionData();
+
+    window.addEventListener("focus", loadRevisionData);
+    window.addEventListener("storage", loadRevisionData);
+
+    return () => {
+      isActive = false;
+      window.removeEventListener("focus", loadRevisionData);
+      window.removeEventListener("storage", loadRevisionData);
+    };
   }, []);
 
   const toggleChecklist = (index) => {
@@ -71,7 +127,6 @@ function RevisionPlan() {
     );
   }
 
-
   const topics = syllabus.topics.map(topic =>
     typeof topic === "string"
       ? {
@@ -81,6 +136,16 @@ function RevisionPlan() {
         }
       : topic
   );
+
+  const getTopicStatus = (topicName) => {
+    if (backendStatuses && backendStatuses[topicName]) {
+      return backendStatuses[topicName];
+    }
+
+    return completedTopics.includes(topicName)
+      ? "recalled"
+      : "not_started";
+  };
 
   const examDate = syllabus.examDate
     ? new Date(`${syllabus.examDate}T00:00:00`)
@@ -93,17 +158,13 @@ function RevisionPlan() {
     ? Math.ceil((examDate - today) / (1000 * 60 * 60 * 24))
     : null;
 
-  const completedCount = topics.filter(topic =>
-    completedTopics.includes(topic.name)
+  const completedCount = topics.filter(
+    topic => getTopicStatus(topic.name) === "recalled"
   ).length;
 
-  const pendingTopics = topics.filter(topic =>
-    !completedTopics.includes(topic.name)
+  const revisionTopics = topics.filter(
+    topic => getTopicStatus(topic.name) !== "recalled"
   );
-
-  const revisionTopics = pendingTopics.length
-    ? pendingTopics
-    : topics;
 
   const revisionDay = examDate
     ? new Date(examDate.getTime() - 24 * 60 * 60 * 1000)
@@ -157,7 +218,7 @@ function RevisionPlan() {
 
         <div className="revision-info-card">
           <RefreshCw size={23} />
-          <strong>{pendingTopics.length}</strong>
+          <strong>{revisionTopics.length}</strong>
           <span>Topics to revisit</span>
         </div>
 
@@ -174,35 +235,42 @@ function RevisionPlan() {
           <div>
             <h2>Topics to Revise</h2>
             <p>
-              {pendingTopics.length
-                ? "Give extra attention to topics you haven't completed."
+              {revisionTopics.length
+                ? "Give extra attention to topics that need revision or are not yet completed."
                 : "You have completed every topic. Review them to strengthen your understanding."}
             </p>
           </div>
           <Brain size={23} />
         </div>
 
-        {revisionTopics.map((topic, index) => (
-          <div className="revision-topic" key={topic.name + index}>
-            <div className="revision-topic-icon">
-              <BookOpen size={19} />
-            </div>
+        {(revisionTopics.length ? revisionTopics : topics).map((topic, index) => {
+          const status = getTopicStatus(topic.name);
 
-            <div>
-              <strong>{topic.name}</strong>
-              <span>
-                {completedTopics.includes(topic.name)
-                  ? "Completed — review to strengthen your understanding"
-                  : "Needs more study and practice"}
-              </span>
-              <span>
-                Estimated time: {topic.estimatedHours || 1} hour(s)
-                {" • "}
-                Priority: {topic.priority || "Medium"}
-              </span>
+          const description = {
+            needs_revision: "AI evaluation identified concepts that need revision",
+            in_progress: "In progress — continue studying and practising",
+            not_started: "Not started — begin studying this topic",
+            recalled: "Completed — review to strengthen your understanding"
+          };
+
+          return (
+            <div className="revision-topic" key={topic.name + index}>
+              <div className="revision-topic-icon">
+                <BookOpen size={19} />
+              </div>
+
+              <div>
+                <strong>{topic.name}</strong>
+                <span>{description[status] || "Needs more study and practice"}</span>
+                <span>
+                  Estimated time: {topic.estimatedHours || 1} hour(s)
+                  {" • "}
+                  Priority: {topic.priority || "Medium"}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="revision-section">

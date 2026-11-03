@@ -1,7 +1,6 @@
 
 from datetime import date
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +38,13 @@ class PlanResponse(BaseModel):
 
 
 # ---------- Recall Evaluation ----------
+
+class EvaluationRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=150)
+    brain_dump: str = Field(min_length=1, max_length=12000)
+    reference_text: str = Field(min_length=1, max_length=30000)
+    plan_id: str | None = None
+
 
 class Misconception(BaseModel):
     student_statement: str

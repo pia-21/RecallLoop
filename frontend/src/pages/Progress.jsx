@@ -10,14 +10,20 @@ import {
   RefreshCw,
   Award
 } from "lucide-react";
+import API_URL from "../config/api";
+
+const PLAN_ID_KEY = "recallLoopPlanId";
 
 function Progress() {
   const [syllabus, setSyllabus] = useState(null);
   const [brainDumps, setBrainDumps] = useState({});
   const [completedTopics, setCompletedTopics] = useState([]);
+  const [backendStatuses, setBackendStatuses] = useState(null);
 
   useEffect(() => {
-    const loadProgress = () => {
+    let isActive = true;
+
+    const loadProgress = async () => {
       try {
         const savedSyllabus = JSON.parse(
           localStorage.getItem("recallLoopSyllabus") || "null"
@@ -31,23 +37,54 @@ function Progress() {
           localStorage.getItem("recallLoopCompletedTopics") || "[]"
         );
 
+        if (!isActive) return;
+
         setSyllabus(savedSyllabus);
         setBrainDumps(savedDumps);
         setCompletedTopics(savedCompleted);
-      } catch {
-        setSyllabus(null);
-        setBrainDumps({});
-        setCompletedTopics([]);
+
+        const planId = localStorage.getItem(PLAN_ID_KEY);
+
+        if (!planId) {
+          setBackendStatuses(null);
+          return;
+        }
+
+        const response = await fetch(
+          `${API_URL}/api/progress/${planId}`
+        );
+
+        if (!response.ok) {
+          throw new Error("Could not fetch backend progress");
+        }
+
+        const data = await response.json();
+
+        if (!isActive) return;
+
+        const statusMap = {};
+
+        data.topics.forEach((topic) => {
+          statusMap[topic.topic_name] = topic.status;
+        });
+
+        setBackendStatuses(statusMap);
+      } catch (error) {
+        console.error("Progress loading error:", error);
+
+        if (isActive) {
+          setBackendStatuses(null);
+        }
       }
     };
 
     loadProgress();
 
-    // Refresh displayed data when another page changes localStorage.
     window.addEventListener("focus", loadProgress);
     window.addEventListener("storage", loadProgress);
 
     return () => {
+      isActive = false;
       window.removeEventListener("focus", loadProgress);
       window.removeEventListener("storage", loadProgress);
     };
@@ -73,13 +110,27 @@ function Progress() {
     };
   });
 
+  const getTopicStatus = (topicName) => {
+    if (backendStatuses && backendStatuses[topicName]) {
+      return backendStatuses[topicName];
+    }
+
+    return completedTopics.includes(topicName)
+      ? "recalled"
+      : "not_started";
+  };
+
   const totalTopics = topics.length;
 
-  const completedCount = topics.filter(topic =>
-    completedTopics.includes(topic.name)
+  const completedCount = topics.filter(
+    topic => getTopicStatus(topic.name) === "recalled"
   ).length;
 
   const remainingCount = totalTopics - completedCount;
+
+  const revisionCount = topics.filter(
+    topic => getTopicStatus(topic.name) === "needs_revision"
+  ).length;
 
   const dumpCount = topics.filter(topic =>
     Boolean(brainDumps[topic.name]?.trim())
@@ -107,14 +158,14 @@ function Progress() {
     {
       title: "Completed Topics",
       value: completedCount,
-      description: "Topics marked as completed",
+      description: "Topics successfully recalled",
       icon: CheckCircle2,
       color: "green"
     },
     {
       title: "Remaining Topics",
       value: remainingCount,
-      description: "Topics left to study",
+      description: "Topics left to complete",
       icon: Clock,
       color: "orange"
     },
@@ -294,21 +345,31 @@ function Progress() {
         </div>
 
         {topics.map((topic) => {
-          const isCompleted = completedTopics.includes(topic.name);
+          const status = getTopicStatus(topic.name);
           const hasDump = Boolean(brainDumps[topic.name]?.trim());
+
+          const statusLabels = {
+            recalled: "Completed",
+            needs_revision: "Needs revision",
+            in_progress: "In progress",
+            not_started: hasDump ? "Brain dump saved" : "Not started"
+          };
+
+          const isCompleted = status === "recalled";
+
+          const progressWidth = {
+            recalled: "100%",
+            needs_revision: "50%",
+            in_progress: "50%",
+            not_started: hasDump ? "25%" : "0%"
+          };
 
           return (
             <div className="topic-progress-item" key={topic.id}>
               <div className="topic-progress-info">
                 <div>
                   <strong>{topic.name}</strong>
-                  <span>
-                    {isCompleted
-                      ? "Completed"
-                      : hasDump
-                      ? "Brain dump saved"
-                      : "Not completed"}
-                  </span>
+                  <span>{statusLabels[status] || "Not started"}</span>
                   <span>
                     {topic.estimatedHours} study hours · {topic.priority} priority
                   </span>
@@ -317,7 +378,7 @@ function Progress() {
                 <span className={`topic-status ${
                   isCompleted ? "done" : "pending"
                 }`}>
-                  {isCompleted ? "Completed" : "In progress"}
+                  {statusLabels[status] || "Not started"}
                 </span>
               </div>
 
@@ -325,7 +386,7 @@ function Progress() {
                 <div
                   className="topic-progress-fill"
                   style={{
-                    width: isCompleted ? "100%" : hasDump ? "50%" : "0%"
+                    width: progressWidth[status] || "0%"
                   }}
                 ></div>
               </div>
