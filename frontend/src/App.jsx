@@ -352,7 +352,7 @@ function App() {
           </button>
 
           <div className="profile">
-            <div className="avatar">T</div>
+            <div className="avatar">{studentName.charAt(0).toUpperCase()}</div>
 
             <div>
               <strong>Student Account</strong>
@@ -411,7 +411,7 @@ function App() {
               <span></span>
             </button>
 
-            <div className="avatar">T</div>
+            <div className="avatar">{studentName.charAt(0).toUpperCase()}</div>
           </div>
 
         </header>
