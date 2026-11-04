@@ -1,4 +1,4 @@
- RecallLoop â€“ System Limitations
+ RecallLoop - System Limitations
 
  1. Introduction
 

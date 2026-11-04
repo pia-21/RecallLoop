@@ -1,4 +1,4 @@
- RecallLoop â€” System Architecture
+ RecallLoop - System Architecture
 
  1. System Overview
 

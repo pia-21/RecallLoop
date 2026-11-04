@@ -1,4 +1,4 @@
- RecallLoop â€“ Testing Documentation
+ RecallLoop - Testing Documentation
 
  1. Introduction
 

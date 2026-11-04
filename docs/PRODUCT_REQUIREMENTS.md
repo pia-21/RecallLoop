@@ -1,4 +1,4 @@
- RecallLoop â€” Product Requirements Document
+ RecallLoop - Product Requirements Document
 
  1. Product Overview
 
